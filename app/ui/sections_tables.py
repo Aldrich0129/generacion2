@@ -27,12 +27,37 @@ def render_tables_section(cfg_tab: dict, simple_inputs: dict) -> dict:
     tnmm_global = render_tnmm_global(cfg_tab)
     all_table_inputs["analisis_indirecto_global"] = tnmm_global
 
+    # Preview de la tabla
+    with st.expander("👁️ Previsualizar tabla", expanded=False):
+        if tnmm_global and "rango_tnmm" in tnmm_global:
+            preview_df = pd.DataFrame([tnmm_global["rango_tnmm"]])
+            preview_df = preview_df.rename(columns={
+                "min": "Mínimo",
+                "lq": "Cuartil Inferior",
+                "med": "Mediana",
+                "uq": "Cuartil Superior",
+                "max": "Máximo"
+            })
+            st.dataframe(preview_df, use_container_width=True)
+
     st.divider()
 
     # 2. Tabla de operaciones vinculadas
     st.subheader("2. Operaciones Vinculadas")
     operaciones = render_operaciones_vinculadas(cfg_tab)
     all_table_inputs["operaciones_vinculadas"] = operaciones
+
+    # Preview de la tabla
+    with st.expander("👁️ Previsualizar tabla", expanded=False):
+        if operaciones:
+            preview_df = pd.DataFrame(operaciones)
+            preview_df = preview_df.rename(columns={
+                "tipo_operacion": "Tipo de Operación",
+                "entidad_vinculada": "Entidad Vinculada",
+                "ingreso_local_file": "Ingreso (EUR)",
+                "gasto_local_file": "Gasto (EUR)"
+            })
+            st.dataframe(preview_df, use_container_width=True)
 
     st.divider()
 
@@ -50,6 +75,21 @@ def render_tables_section(cfg_tab: dict, simple_inputs: dict) -> dict:
             with st.expander(f"Operación {i+1}: {tipo_op}"):
                 tnmm_op = render_tnmm_operacion(cfg_tab, i+1, tipo_op)
                 all_table_inputs[f"analisis_indirecto_operacion_{i+1}"] = tnmm_op
+
+                # Preview de la tabla TNMM de operación
+                with st.expander("👁️ Previsualizar tabla TNMM", expanded=False):
+                    if tnmm_op:
+                        # Excluir 'nombre_operacion' del preview
+                        preview_data = {k: v for k, v in tnmm_op.items() if k != "nombre_operacion"}
+                        preview_df = pd.DataFrame([preview_data])
+                        preview_df = preview_df.rename(columns={
+                            "min": "Mínimo",
+                            "lq": "Cuartil Inferior",
+                            "med": "Mediana",
+                            "uq": "Cuartil Superior",
+                            "max": "Máximo"
+                        })
+                        st.dataframe(preview_df, use_container_width=True)
     else:
         st.info("Primero agrega operaciones en la tabla de 'Operaciones Vinculadas'")
 
@@ -59,6 +99,21 @@ def render_tables_section(cfg_tab: dict, simple_inputs: dict) -> dict:
     st.subheader("4. Partidas Contables y Márgenes")
     partidas = render_partidas_contables(cfg_tab, simple_inputs)
     all_table_inputs["partidas_contables"] = partidas
+
+    # Preview de la tabla
+    with st.expander("👁️ Previsualizar tabla", expanded=False):
+        if partidas:
+            # Crear DataFrame para preview
+            preview_data = []
+            for row_id, values in partidas.items():
+                row_data = {
+                    "Concepto": row_id.replace("_", " ").title(),
+                    "Ejercicio Actual": values.get("ejercicio_actual", 0),
+                    "Ejercicio Anterior": values.get("ejercicio_anterior", 0)
+                }
+                preview_data.append(row_data)
+            preview_df = pd.DataFrame(preview_data)
+            st.dataframe(preview_df, use_container_width=True)
 
     st.divider()
 
@@ -97,6 +152,20 @@ def render_tables_section(cfg_tab: dict, simple_inputs: dict) -> dict:
     riesgos = render_riesgos(cfg_tab)
     all_table_inputs["riesgos_pt"] = riesgos
 
+    # Preview de la tabla
+    with st.expander("👁️ Previsualizar tabla", expanded=False):
+        if riesgos:
+            preview_df = pd.DataFrame(riesgos)
+            preview_df = preview_df.rename(columns={
+                "numero": "#",
+                "elemento_riesgo": "Elemento de Riesgo",
+                "impacto_compania": "Impacto",
+                "nivel_afectacion_preliminar": "Nivel Prelim.",
+                "mitigadores": "Mitigadores",
+                "nivel_afectacion_final": "Nivel Final"
+            })
+            st.dataframe(preview_df, use_container_width=True)
+
     return all_table_inputs
 
 
@@ -104,9 +173,12 @@ def render_tnmm_global(cfg_tab: dict) -> dict:
     """Renderiza la tabla TNMM global."""
     cfg = cfg_tab["tables"]["analisis_indirecto_global"]
 
-    st.markdown("Ingresa los valores del rango TNMM global:")
+    st.markdown("Ingresa los valores del rango TNMM global (valores por defecto: 1%, 2%, 3%, 4%, 5%):")
 
     data = {}
+
+    # Valores por defecto para min, lq, med, uq, max
+    default_values = [1.0, 2.0, 3.0, 4.0, 5.0]
 
     cols = st.columns(5)
     for i, col_cfg in enumerate(cfg["columns"]):
@@ -120,7 +192,8 @@ def render_tnmm_global(cfg_tab: dict) -> dict:
                 min_value=0.0,
                 max_value=100.0,
                 step=0.01,
-                format="%.2f"
+                format="%.2f",
+                value=default_values[i] if i < len(default_values) else 0.0
             )
 
         if "rango_tnmm" not in data:
@@ -135,7 +208,12 @@ def render_tnmm_operacion(cfg_tab: dict, n: int, nombre: str) -> dict:
     """Renderiza tabla TNMM para una operación específica."""
     cfg = cfg_tab["tables"]["analisis_indirecto_operacion"]
 
+    st.markdown("Valores por defecto: 1%, 2%, 3%, 4%, 5%")
+
     data = {"nombre_operacion": nombre}
+
+    # Valores por defecto para min, lq, med, uq, max
+    default_values = [1.0, 2.0, 3.0, 4.0, 5.0]
 
     cols = st.columns(5)
     for i, col_cfg in enumerate(cfg["columns"]):
@@ -149,7 +227,8 @@ def render_tnmm_operacion(cfg_tab: dict, n: int, nombre: str) -> dict:
                 min_value=0.0,
                 max_value=100.0,
                 step=0.01,
-                format="%.2f"
+                format="%.2f",
+                value=default_values[i] if i < len(default_values) else 0.0
             )
 
         data[col_id] = value

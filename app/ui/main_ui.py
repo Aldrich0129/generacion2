@@ -58,8 +58,8 @@ def render_main_ui(cfg_simple: dict, cfg_cond: dict, cfg_tab: dict):
         st.divider()
         st.markdown("**Desarrollado con Streamlit + Python-docx**")
 
-    # Usar pestañas para organizar las secciones
-    tabs = st.tabs(["📝 Variables Simples", "🔀 Condiciones", "📊 Tablas"])
+    # Usar pestañas para organizar las secciones (Tablas antes de Condiciones)
+    tabs = st.tabs(["📝 Variables Simples", "📊 Tablas", "🔀 Condiciones"])
 
     # Inicializar variables
     simple_inputs = {}
@@ -70,13 +70,13 @@ def render_main_ui(cfg_simple: dict, cfg_cond: dict, cfg_tab: dict):
     with tabs[0]:
         simple_inputs = render_simple_vars_section(cfg_simple)
 
-    # Pestaña 2: Condiciones
+    # Pestaña 2: Tablas
     with tabs[1]:
-        condition_inputs = render_conditions_section(cfg_cond)
-
-    # Pestaña 3: Tablas
-    with tabs[2]:
         table_inputs = render_tables_section(cfg_tab, simple_inputs)
+
+    # Pestaña 3: Condiciones
+    with tabs[2]:
+        condition_inputs = render_conditions_section(cfg_cond)
 
     return simple_inputs, condition_inputs, table_inputs
 
