@@ -269,6 +269,9 @@ class WordEngine:
         # Aplicar bordes personalizados a toda la tabla si show_borders es True
         if show_borders:
             self._apply_table_borders(table, border_color)
+        else:
+            # Eliminar todos los bordes si show_borders es False
+            self._remove_table_borders(table)
 
         # Llenar encabezados
         header_row = table.rows[0]
@@ -554,6 +557,33 @@ class WordEngine:
                     border.set(qn('w:sz'), '4')  # Tamaño del borde
                     border.set(qn('w:space'), '0')
                     border.set(qn('w:color'), hex_color)
+                    tcBorders.append(border)
+
+                tcPr.append(tcBorders)
+
+    def _remove_table_borders(self, table):
+        """
+        Elimina todos los bordes de una tabla.
+
+        Args:
+            table: Tabla de python-docx
+        """
+        # Eliminar bordes de cada celda
+        for row in table.rows:
+            for cell in row.cells:
+                tc = cell._element
+                tcPr = tc.get_or_add_tcPr()
+
+                # Crear bordes vacíos (sin líneas)
+                tcBorders = OxmlElement('w:tcBorders')
+
+                # Definir cada borde como "none"
+                for border_name in ['top', 'left', 'bottom', 'right']:
+                    border = OxmlElement(f'w:{border_name}')
+                    border.set(qn('w:val'), 'none')
+                    border.set(qn('w:sz'), '0')
+                    border.set(qn('w:space'), '0')
+                    border.set(qn('w:color'), 'auto')
                     tcBorders.append(border)
 
                 tcPr.append(tcBorders)
