@@ -47,18 +47,28 @@ def render_table_format_section() -> dict:
 
     with col2:
         if show_borders:
+            # Obtener el valor actual de border_style del session state
+            current_border_style = st.session_state.table_format.get("border_style", "single")
+
+            # Lista de estilos válidos
+            valid_styles = ["single", "double", "dashed", "dotted"]
+
+            # Si el valor actual no es válido (ej: "none"), usar "single" por defecto
+            if current_border_style not in valid_styles:
+                current_border_style = "single"
+
             border_style = st.selectbox(
                 "Estilo de bordes",
-                options=["single", "double", "dashed", "dotted"],
-                index=["single", "double", "dashed", "dotted"].index(
-                    st.session_state.table_format["border_style"]
-                ),
+                options=valid_styles,
+                index=valid_styles.index(current_border_style),
                 key="format_border_style",
                 help="Estilo de línea de los bordes"
             )
             format_config["border_style"] = border_style
         else:
-            format_config["border_style"] = "none"
+            # No actualizar border_style en session_state cuando está desactivado
+            # Mantener el último valor válido para cuando se vuelva a activar
+            format_config["border_style"] = st.session_state.table_format.get("border_style", "single")
 
     with col3:
         if show_borders:
