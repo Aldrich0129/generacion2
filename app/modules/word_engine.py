@@ -33,32 +33,41 @@ class WordEngine:
     def replace_variables(self, context: dict):
         """
         Reemplaza todas las variables <<marcador>> en el documento manteniendo estilos.
+        Si el valor está vacío, elimina el marcador del documento.
 
         Args:
             context: Diccionario con {marcador: valor}
         """
+        # Filtrar valores vacíos - los marcadores con valores vacíos se eliminarán
+        context_filtered = {}
+        for marker, value in context.items():
+            if value is None or value == "" or (isinstance(value, str) and not value.strip()):
+                # Valor vacío, no reemplazar (se limpiará después)
+                continue
+            context_filtered[marker] = value
+
         # Reemplazar en párrafos
         for paragraph in self.doc.paragraphs:
-            self._replace_in_paragraph(paragraph, context)
+            self._replace_in_paragraph(paragraph, context_filtered)
 
         # Reemplazar en tablas
         for table in self.doc.tables:
             for row in table.rows:
                 for cell in row.cells:
                     for paragraph in cell.paragraphs:
-                        self._replace_in_paragraph(paragraph, context)
+                        self._replace_in_paragraph(paragraph, context_filtered)
 
         # Reemplazar en headers y footers
         for section in self.doc.sections:
             # Header
             header = section.header
             for paragraph in header.paragraphs:
-                self._replace_in_paragraph(paragraph, context)
+                self._replace_in_paragraph(paragraph, context_filtered)
 
             # Footer
             footer = section.footer
             for paragraph in footer.paragraphs:
-                self._replace_in_paragraph(paragraph, context)
+                self._replace_in_paragraph(paragraph, context_filtered)
 
     def _replace_in_paragraph(self, paragraph, context: dict):
         """
@@ -209,7 +218,21 @@ class WordEngine:
         from docx.table import Table
 
         table = self.doc.add_table(rows=num_rows, cols=num_cols)
-        table.style = 'Light Grid Accent 1'  # Estilo por defecto
+
+        # Intentar aplicar estilo, si no existe usar el estilo por defecto
+        try:
+            table.style = 'Light Grid Accent 1'
+        except KeyError:
+            # Si el estilo no existe, intentar con otros estilos comunes
+            try:
+                table.style = 'Light Grid'
+            except KeyError:
+                # Si ningún estilo funciona, usar 'Table Grid' que es el estándar
+                try:
+                    table.style = 'Table Grid'
+                except KeyError:
+                    # Si ni siquiera Table Grid existe, dejar el estilo por defecto
+                    pass
 
         # Insertar la tabla después del párrafo
         table_element = table._element
