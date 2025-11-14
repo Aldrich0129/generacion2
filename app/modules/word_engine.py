@@ -1,0 +1,410 @@
+"""
+Motor de generación de documentos Word usando python-docx.
+Maneja reemplazo de variables, inserción de tablas y bloques condicionales.
+"""
+from docx import Document
+from docx.shared import Pt, RGBColor, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from pathlib import Path
+from typing import Dict, List, Any, Optional
+import re
+from copy import deepcopy
+
+
+class WordEngine:
+    """Motor para generar documentos Word desde plantillas."""
+
+    def __init__(self, template_path: Path):
+        """
+        Inicializa el motor con una plantilla.
+
+        Args:
+            template_path: Ruta a la plantilla Word (.docx)
+        """
+        self.template_path = Path(template_path)
+
+        if not self.template_path.exists():
+            raise FileNotFoundError(f"Plantilla no encontrada: {template_path}")
+
+        self.doc = Document(self.template_path)
+
+    def replace_variables(self, context: dict):
+        """
+        Reemplaza todas las variables <<marcador>> en el documento manteniendo estilos.
+
+        Args:
+            context: Diccionario con {marcador: valor}
+        """
+        # Reemplazar en párrafos
+        for paragraph in self.doc.paragraphs:
+            self._replace_in_paragraph(paragraph, context)
+
+        # Reemplazar en tablas
+        for table in self.doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for paragraph in cell.paragraphs:
+                        self._replace_in_paragraph(paragraph, context)
+
+        # Reemplazar en headers y footers
+        for section in self.doc.sections:
+            # Header
+            header = section.header
+            for paragraph in header.paragraphs:
+                self._replace_in_paragraph(paragraph, context)
+
+            # Footer
+            footer = section.footer
+            for paragraph in footer.paragraphs:
+                self._replace_in_paragraph(paragraph, context)
+
+    def _replace_in_paragraph(self, paragraph, context: dict):
+        """
+        Reemplaza marcadores en un párrafo manteniendo el formato.
+
+        Args:
+            paragraph: Párrafo de python-docx
+            context: Diccionario de reemplazos
+        """
+        # Construir el texto completo del párrafo
+        full_text = paragraph.text
+
+        # Buscar todos los marcadores en el texto
+        for marker, value in context.items():
+            if marker in full_text:
+                # Reemplazar manteniendo el formato
+                self._replace_marker_in_paragraph(paragraph, marker, str(value))
+                full_text = paragraph.text  # Actualizar el texto completo
+
+    def _replace_marker_in_paragraph(self, paragraph, marker: str, value: str):
+        """
+        Reemplaza un marcador específico manteniendo el formato del primer run.
+
+        Args:
+            paragraph: Párrafo de python-docx
+            marker: Marcador a buscar (ej: "<<Variable>>")
+            value: Valor de reemplazo
+        """
+        # Buscar el marcador en los runs
+        full_text = ""
+        runs_text = []
+
+        for run in paragraph.runs:
+            runs_text.append(run.text)
+            full_text += run.text
+
+        if marker not in full_text:
+            return
+
+        # Encontrar la posición del marcador
+        marker_start = full_text.find(marker)
+        marker_end = marker_start + len(marker)
+
+        # Reconstruir el párrafo
+        current_pos = 0
+        new_runs = []
+
+        for i, run in enumerate(paragraph.runs):
+            run_text = runs_text[i]
+            run_start = current_pos
+            run_end = current_pos + len(run_text)
+
+            # Verificar si este run contiene parte del marcador
+            if run_end <= marker_start or run_start >= marker_end:
+                # Este run no toca el marcador, mantenerlo
+                new_runs.append((run_text, run))
+            elif run_start <= marker_start and run_end >= marker_end:
+                # El marcador está completamente dentro de este run
+                before = run_text[:marker_start - run_start]
+                after = run_text[marker_end - run_start:]
+                new_runs.append((before + value + after, run))
+            elif run_start < marker_start < run_end:
+                # El marcador comienza en este run
+                before = run_text[:marker_start - run_start]
+                new_runs.append((before + value, run))
+            elif run_start < marker_end <= run_end:
+                # El marcador termina en este run
+                after = run_text[marker_end - run_start:]
+                if after:
+                    new_runs.append((after, run))
+            # else: este run está completamente dentro del marcador, se omite
+
+            current_pos = run_end
+
+        # Limpiar runs existentes
+        for run in paragraph.runs:
+            run.text = ""
+
+        # Recrear runs con el nuevo texto
+        if new_runs:
+            for new_text, original_run in new_runs:
+                if new_text:
+                    # Copiar formato del run original
+                    new_run = paragraph.add_run(new_text)
+                    new_run.bold = original_run.bold
+                    new_run.italic = original_run.italic
+                    new_run.underline = original_run.underline
+                    new_run.font.size = original_run.font.size
+                    new_run.font.name = original_run.font.name
+                    if original_run.font.color.rgb:
+                        new_run.font.color.rgb = original_run.font.color.rgb
+
+    def insert_tables(self, tables_data: dict, cfg_tab: dict):
+        """
+        Inserta tablas en los marcadores correspondientes.
+
+        Args:
+            tables_data: Datos de las tablas construidas
+            cfg_tab: Configuración de tablas
+        """
+        for marker, table_data in tables_data.items():
+            self._insert_table_at_marker(marker, table_data)
+
+    def _insert_table_at_marker(self, marker: str, table_data: dict):
+        """
+        Inserta una tabla en la posición del marcador.
+
+        Args:
+            marker: Marcador donde insertar la tabla
+            table_data: Datos de la tabla (rows, columns, etc.)
+        """
+        # Buscar el marcador en el documento
+        for i, paragraph in enumerate(self.doc.paragraphs):
+            if marker in paragraph.text:
+                # Crear la tabla justo después de este párrafo
+                self._create_table_after_paragraph(i, table_data)
+
+                # Limpiar el marcador
+                paragraph.text = paragraph.text.replace(marker, "")
+                return
+
+    def _create_table_after_paragraph(self, para_index: int, table_data: dict):
+        """
+        Crea una tabla después de un párrafo específico.
+
+        Args:
+            para_index: Índice del párrafo
+            table_data: Datos de la tabla
+        """
+        columns = table_data.get("columns", [])
+        rows = table_data.get("rows", [])
+        footer_rows = table_data.get("footer_rows", [])
+        headers = table_data.get("headers", {})
+
+        if not columns or not rows:
+            return
+
+        # Calcular número de filas (header + data + footer)
+        num_rows = 1 + len(rows) + len(footer_rows)
+        num_cols = len(columns)
+
+        # Encontrar el elemento XML del párrafo
+        para = self.doc.paragraphs[para_index]
+        para_element = para._element
+
+        # Crear la tabla
+        from docx.oxml import parse_xml
+        from docx.table import Table
+
+        table = self.doc.add_table(rows=num_rows, cols=num_cols)
+        table.style = 'Light Grid Accent 1'  # Estilo por defecto
+
+        # Insertar la tabla después del párrafo
+        table_element = table._element
+        para_element.addnext(table_element)
+
+        # Llenar encabezados
+        header_row = table.rows[0]
+        for j, col in enumerate(columns):
+            cell = header_row.cells[j]
+            header_text = col.get("header", "")
+
+            # Reemplazar placeholders en el header si hay headers dinámicos
+            if headers:
+                for key, value in headers.items():
+                    header_text = header_text.replace(f"{{{key}}}", str(value))
+
+            cell.text = header_text
+            # Aplicar formato de encabezado
+            for paragraph in cell.paragraphs:
+                for run in paragraph.runs:
+                    run.bold = True
+
+        # Llenar filas de datos
+        for i, row_data in enumerate(rows):
+            row = table.rows[i + 1]
+            for j, col in enumerate(columns):
+                cell = row.cells[j]
+                col_id = col["id"]
+                value = row_data.get(col_id, "")
+
+                # Formatear según el tipo
+                col_type = col.get("type", "text")
+                formatted_value = self._format_cell_value(value, col_type)
+
+                cell.text = formatted_value
+
+        # Llenar filas de footer
+        if footer_rows:
+            for i, footer_data in enumerate(footer_rows):
+                row_index = 1 + len(rows) + i
+                row = table.rows[row_index]
+
+                for j, col in enumerate(columns):
+                    cell = row.cells[j]
+                    col_id = col["id"]
+                    value = footer_data.get(col_id, "")
+
+                    col_type = col.get("type", "text")
+                    formatted_value = self._format_cell_value(value, col_type)
+
+                    cell.text = formatted_value
+
+                    # Aplicar formato de footer (negrita)
+                    for paragraph in cell.paragraphs:
+                        for run in paragraph.runs:
+                            run.bold = True
+
+    def _format_cell_value(self, value: Any, col_type: str) -> str:
+        """
+        Formatea el valor de una celda según su tipo.
+
+        Args:
+            value: Valor a formatear
+            col_type: Tipo de columna
+
+        Returns:
+            Valor formateado como string
+        """
+        if value is None or value == "":
+            return ""
+
+        try:
+            if col_type == "percent":
+                if isinstance(value, (int, float)):
+                    return f"{value:.2f}%"
+                return str(value)
+            elif col_type == "number":
+                if isinstance(value, (int, float)):
+                    return f"{value:,.2f}"
+                return str(value)
+            elif col_type == "integer":
+                if isinstance(value, (int, float)):
+                    return str(int(value))
+                return str(value)
+            else:
+                return str(value)
+        except:
+            return str(value)
+
+    def insert_conditional_blocks(self, docs_to_insert: list, config_dir: Path):
+        """
+        Inserta bloques condicionales de otros documentos Word.
+
+        Args:
+            docs_to_insert: Lista de {marker, file} a insertar
+            config_dir: Directorio base para los archivos Word
+        """
+        for doc_info in docs_to_insert:
+            marker = doc_info["marker"]
+            word_file = doc_info["file"]
+
+            file_path = config_dir.parent / word_file
+
+            if file_path.exists():
+                self._insert_document_at_marker(marker, file_path)
+            else:
+                print(f"Advertencia: Archivo no encontrado: {file_path}")
+                # Limpiar el marcador
+                self.replace_variables({marker: ""})
+
+    def _insert_document_at_marker(self, marker: str, doc_path: Path):
+        """
+        Inserta el contenido de otro documento en la posición del marcador.
+
+        Args:
+            marker: Marcador donde insertar
+            doc_path: Ruta al documento a insertar
+        """
+        # Cargar el documento a insertar
+        doc_to_insert = Document(doc_path)
+
+        # Buscar el marcador
+        for i, paragraph in enumerate(self.doc.paragraphs):
+            if marker in paragraph.text:
+                # Limpiar el marcador
+                paragraph.text = paragraph.text.replace(marker, "")
+
+                # Insertar el contenido del documento
+                para_element = paragraph._element
+
+                # Copiar párrafos del documento a insertar
+                for insert_para in doc_to_insert.paragraphs:
+                    # Crear un nuevo párrafo con el mismo formato
+                    new_para = deepcopy(insert_para._element)
+                    para_element.addnext(new_para)
+                    para_element = new_para
+
+                # Copiar tablas del documento a insertar
+                for insert_table in doc_to_insert.tables:
+                    new_table = deepcopy(insert_table._element)
+                    para_element.addnext(new_table)
+                    para_element = new_table
+
+                return
+
+    def clean_unused_markers(self):
+        """
+        Limpia todos los marcadores no utilizados del documento.
+        """
+        marker_pattern = re.compile(r'<<[^>]+>>')
+
+        # Limpiar en párrafos
+        for paragraph in self.doc.paragraphs:
+            if marker_pattern.search(paragraph.text):
+                paragraph.text = marker_pattern.sub('', paragraph.text)
+
+        # Limpiar en tablas
+        for table in self.doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for paragraph in cell.paragraphs:
+                        if marker_pattern.search(paragraph.text):
+                            paragraph.text = marker_pattern.sub('', paragraph.text)
+
+    def clean_empty_paragraphs(self):
+        """
+        Elimina párrafos vacíos del documento.
+        """
+        # Nota: Eliminar párrafos en python-docx es complicado
+        # Por ahora, solo los marcamos como vacíos
+        for paragraph in self.doc.paragraphs:
+            if not paragraph.text.strip():
+                # Opcionalmente reducir el espaciado
+                paragraph.paragraph_format.space_before = Pt(0)
+                paragraph.paragraph_format.space_after = Pt(0)
+
+    def save(self, output_path: Path):
+        """
+        Guarda el documento generado.
+
+        Args:
+            output_path: Ruta donde guardar el documento
+        """
+        self.doc.save(output_path)
+
+    def get_document_bytes(self) -> bytes:
+        """
+        Obtiene el documento como bytes (para descarga en Streamlit).
+
+        Returns:
+            Bytes del documento
+        """
+        from io import BytesIO
+
+        buffer = BytesIO()
+        self.doc.save(buffer)
+        buffer.seek(0)
+        return buffer.getvalue()
