@@ -12,6 +12,8 @@ Aplicación completa basada en Streamlit + Python para generar informes Word a p
 - ✅ Limpieza automática de marcadores
 - ✅ Soporte para múltiples tipos de datos (texto, número, porcentaje, email, etc.)
 - ✅ Tablas con filas dinámicas y cálculos automáticos
+- ✅ **Conservación automática de imágenes de fondo** en portada y páginas finales
+- ✅ **Exportación dual**: Descarga en formato Word (.docx) y PDF
 
 ## 🏗️ Arquitectura
 
@@ -53,7 +55,25 @@ Aplicación completa basada en Streamlit + Python para generar informes Word a p
 pip install -r requirements.txt
 ```
 
-2. **Verificar estructura:**
+2. **Instalar Pandoc (requerido para exportación a PDF):**
+
+**En Linux (Ubuntu/Debian):**
+```bash
+sudo apt-get update
+sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended
+```
+
+**En macOS:**
+```bash
+brew install pandoc
+brew install --cask basictex
+```
+
+**En Windows:**
+- Descargar e instalar Pandoc desde: https://pandoc.org/installing.html
+- Descargar e instalar MiKTeX desde: https://miktex.org/download
+
+3. **Verificar estructura:**
 
 Asegúrate de que los archivos YAML y la plantilla estén en `/config`:
 - variables_simples.yaml
@@ -61,7 +81,7 @@ Asegúrate de que los archivos YAML y la plantilla estén en `/config`:
 - tablas.yaml
 - Plantilla.docx
 
-3. **Archivos condicionales:**
+4. **Archivos condicionales:**
 
 Coloca los archivos Word de bloques condicionales en `/condiciones`:
 - comentario_inicial_formal.docx
@@ -82,7 +102,27 @@ La aplicación se abrirá en tu navegador en `http://localhost:8501`
 2. **Condiciones:** Selecciona qué bloques incluir (Sí/No)
 3. **Tablas:** Rellena todas las tablas requeridas
 4. **Generar:** Haz clic en "Generar Informe Word"
-5. **Descargar:** Descarga el documento generado
+5. **Descargar:** Elige entre dos formatos:
+   - 📥 **Word (.docx)**: Formato editable para modificaciones posteriores
+   - 📑 **PDF**: Formato final para presentación y distribución
+
+## 🖼️ Imágenes de Fondo en Plantillas
+
+El sistema preserva automáticamente todas las imágenes de fondo de la plantilla Word original:
+
+- **Imágenes de portada**: Se mantienen intactas
+- **Imágenes de página final**: Se conservan automáticamente
+- **Imágenes en headers/footers**: Se preservan sin modificación
+- **Formas y elementos gráficos**: Permanecen en sus posiciones originales
+
+**Cómo agregar imágenes de fondo a la plantilla:**
+
+1. Abre `Plantilla.docx` en Microsoft Word
+2. Ve a `Diseño` → `Marca de agua` → `Marca de agua personalizada`
+3. O inserta una imagen y configúrala como "Detrás del texto"
+4. Guarda la plantilla
+
+El motor de generación (`python-docx`) solo modifica el contenido de texto y tablas, manteniendo intactos todos los elementos gráficos de la plantilla original.
 
 ## 🔧 Tipos de Tablas Soportadas
 
@@ -118,6 +158,8 @@ Ejemplos:
 - **python-docx:** Manipulación de documentos Word
 - **PyYAML:** Parsing de configuraciones
 - **Pandas:** Manipulación de datos tabulares
+- **pypandoc:** Conversión de documentos a PDF
+- **Pandoc + XeLaTeX:** Motor de conversión a PDF con soporte Unicode
 
 ## 📄 Licencia
 
@@ -138,3 +180,13 @@ Desarrollado para Mazars - Informes de Precios de Transferencia
 **Tablas no se insertan correctamente**
 - Verifica que los marcadores en la plantilla coincidan exactamente con los del YAML
 - Los marcadores son case-sensitive
+
+**No se puede generar PDF**
+- Asegúrate de que Pandoc esté instalado: `pandoc --version`
+- Instala XeLaTeX: `sudo apt-get install texlive-xetex` (Linux)
+- Si falla, descarga el archivo Word y conviértelo manualmente
+
+**Las imágenes de fondo no aparecen**
+- Las imágenes deben estar en la plantilla original `Plantilla.docx`
+- Verifica que las imágenes estén configuradas como "Detrás del texto" en Word
+- python-docx preserva automáticamente las imágenes existentes en la plantilla
