@@ -88,7 +88,7 @@ tables:
     ui_component: "grid"
     remove_empty_rows: false
     dynamic_headers:
-      ejercicio_actual_var: "<<Ejercicio completo>>"
+      ejercicio_actual_var: "<<Ejercicio corto>>"
       ejercicio_anterior_var: "ejercicio_anterior"   # variable que pedirá la UI
     columns:
       - id: partida
