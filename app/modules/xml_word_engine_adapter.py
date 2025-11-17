@@ -315,20 +315,402 @@ class XMLWordEngineAdapter:
     
     # Métodos simplificados/stub para compatibilidad
     def process_salto_markers(self):
-        """Procesa marcadores {salto} - implementación simplificada."""
-        pass  # Implementar si es crítico
-    
+        """
+        Procesa los marcadores {salto} insertando saltos de página y eliminando el marcador.
+        Implementación completa usando XML directo.
+        """
+        salto_pattern = re.compile(r'\{salto\}')
+        body = self.root.find(f'.//{{{self.w_ns}}}body')
+        if body is None:
+            return
+
+        # Obtener todos los párrafos
+        all_paras = body.findall(f'.//{{{self.w_ns}}}p')
+
+        for para in all_paras:
+            para_text = self._get_paragraph_text(para)
+
+            if salto_pattern.search(para_text):
+                # Procesar cada elemento de texto que contiene {salto}
+                for text_elem in para.findall(f'.//{{{self.w_ns}}}t'):
+                    if text_elem.text and '{salto}' in text_elem.text:
+                        # Dividir el texto en antes y después del {salto}
+                        parts = text_elem.text.split('{salto}', 1)
+
+                        if len(parts) == 2:
+                            before_salto = parts[0]
+                            after_salto = parts[1]
+
+                            # Actualizar el texto antes del salto
+                            text_elem.text = before_salto
+
+                            # Obtener el run padre
+                            run = text_elem.getparent()
+
+                            # Crear un nuevo run con el salto de página
+                            new_run = etree.Element(f'{{{self.w_ns}}}r')
+                            br = etree.SubElement(new_run, f'{{{self.w_ns}}}br')
+                            br.set(f'{{{self.w_ns}}}type', 'page')
+
+                            # Insertar el nuevo run después del run actual
+                            para_index = list(para).index(run)
+                            para.insert(para_index + 1, new_run)
+
+                            # Si hay texto después del salto, crear otro run
+                            if after_salto:
+                                after_run = etree.Element(f'{{{self.w_ns}}}r')
+                                after_text = etree.SubElement(after_run, f'{{{self.w_ns}}}t')
+                                after_text.text = after_salto
+                                after_text.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+                                para.insert(para_index + 2, after_run)
+                        else:
+                            # Solo eliminar el marcador
+                            text_elem.text = salto_pattern.sub('', text_elem.text)
+
     def process_table_of_contents(self):
-        """Procesa tabla de contenidos - implementación simplificada."""
-        pass  # Implementar si es crítico
-    
-    def clean_unused_markers(self):
-        """Limpia marcadores no utilizados."""
-        marker_pattern = re.compile(r'<<[^>]+>>')
-        
+        """
+        Procesa el índice (tabla de contenidos) del documento usando marcadores numéricos.
+
+        Busca contenidos entre <<Indice>> y <<fin Indice>>, extrae los marcadores numéricos
+        (<<1>>, <<2>>, etc.), inserta saltos de página antes de ellos, calcula los números
+        de página y actualiza el índice. También inserta un salto de página antes del índice.
+        """
+        body = self.root.find(f'.//{{{self.w_ns}}}body')
+        if body is None:
+            return
+
+        all_paras = list(body.findall(f'{{{self.w_ns}}}p'))
+
+        # Buscar los marcadores de inicio y fin del índice
+        toc_start_idx = None
+        toc_end_idx = None
+
+        for i, para in enumerate(all_paras):
+            text = self._get_paragraph_text(para)
+            if "<<Indice>>" in text:
+                toc_start_idx = i
+            elif "<<fin Indice>>" in text:
+                toc_end_idx = i
+                break
+
+        # Si no se encuentran los marcadores, no hacer nada
+        if toc_start_idx is None or toc_end_idx is None:
+            return
+
+        # Extraer las entradas del índice con sus marcadores numéricos
+        toc_entries = []  # Lista de {paragraph, title, marker, marker_num}
+        marker_pattern = re.compile(r'<<(\d+)>>')
+
+        for i in range(toc_start_idx + 1, toc_end_idx):
+            para = all_paras[i]
+            text = self._get_paragraph_text(para)
+
+            if text.strip():  # Solo procesar párrafos no vacíos
+                # Buscar el marcador numérico en el texto
+                match = marker_pattern.search(text)
+                if match:
+                    marker_num = match.group(1)
+                    marker = f"<<{marker_num}>>"
+
+                    # Extraer el título (texto antes del marcador)
+                    title = marker_pattern.sub('', text).strip()
+
+                    toc_entries.append({
+                        'paragraph': para,
+                        'title': title,
+                        'marker': marker,
+                        'marker_num': marker_num
+                    })
+
+        # Si no hay entradas con marcadores, limpiar y salir
+        if not toc_entries:
+            self._remove_marker_from_paragraph(all_paras[toc_start_idx], "<<Indice>>")
+            self._remove_marker_from_paragraph(all_paras[toc_end_idx], "<<fin Indice>>")
+            return
+
+        # Fase 1: Buscar cada marcador en el documento e insertar saltos de página
+        for entry in toc_entries:
+            marker = entry['marker']
+            self._insert_page_break_before_marker_xml(marker, toc_end_idx, all_paras)
+
+        # Fase 2: Calcular números de página para cada marcador
+        marker_to_page = {}
+        for entry in toc_entries:
+            marker = entry['marker']
+            page_num = self._find_marker_page_number_xml(marker, toc_end_idx, all_paras)
+            if page_num is not None:
+                marker_to_page[marker] = page_num
+
+        # Fase 3: Actualizar el índice con los números de página
+        for entry in toc_entries:
+            para = entry['paragraph']
+            title = entry['title']
+            marker = entry['marker']
+
+            if marker in marker_to_page:
+                page_num = marker_to_page[marker]
+
+                # Eliminar cualquier número de página existente al final
+                clean_title = re.sub(r'[\.\s]+\d+$', '', title).strip()
+
+                # Calcular el número de puntos necesarios
+                dots_length = max(3, 80 - len(clean_title) - len(str(page_num)) - 2)
+                dots = '.' * dots_length
+
+                # Actualizar el texto del párrafo
+                new_text = f"{clean_title} {dots} {page_num}"
+                self._set_paragraph_text(para, new_text)
+            else:
+                # Si no se encontró el marcador, al menos limpiar el marcador del título
+                self._set_paragraph_text(para, title)
+
+        # Fase 4: Eliminar todos los marcadores numéricos del documento
+        self._remove_numeric_markers_xml()
+
+        # Eliminar los marcadores <<Indice>> y <<fin Indice>>
+        self._remove_marker_from_paragraph(all_paras[toc_start_idx], "<<Indice>>")
+        self._remove_marker_from_paragraph(all_paras[toc_end_idx], "<<fin Indice>>")
+
+        # Asegurar que el índice empiece en una nueva página
+        if toc_start_idx > 0:
+            # Insertar salto de página al final del párrafo anterior
+            prev_para = all_paras[toc_start_idx - 1]
+            self._insert_page_break_at_end_of_paragraph(prev_para)
+
+    def _insert_page_break_before_marker_xml(self, marker: str, toc_end_idx: int, all_paras: list):
+        """
+        Busca un marcador numérico en el documento e inserta un salto de página antes de él.
+
+        Args:
+            marker: Marcador numérico a buscar (ej: "<<1>>")
+            toc_end_idx: Índice del final del índice (para empezar búsqueda después)
+            all_paras: Lista de todos los párrafos
+        """
+        for i in range(toc_end_idx + 1, len(all_paras)):
+            para = all_paras[i]
+            para_text = self._get_paragraph_text(para)
+
+            if marker in para_text:
+                # Verificar si ya hay un salto de página
+                has_page_break = self._has_page_break_xml(para)
+
+                # También verificar el párrafo anterior
+                if i > 0 and not has_page_break:
+                    prev_para = all_paras[i - 1]
+                    has_page_break = self._has_page_break_xml(prev_para)
+
+                # Si no tiene salto de página, insertar uno
+                if not has_page_break:
+                    if i > 0:
+                        # Insertar al final del párrafo anterior
+                        prev_para = all_paras[i - 1]
+                        self._insert_page_break_at_end_of_paragraph(prev_para)
+                    else:
+                        # Insertar al inicio del párrafo actual
+                        self._insert_page_break_at_start_of_paragraph(para)
+
+                # Solo procesar la primera ocurrencia
+                break
+
+    def _find_marker_page_number_xml(self, marker: str, start_search_idx: int, all_paras: list) -> Optional[int]:
+        """
+        Encuentra el número de página donde aparece un marcador numérico.
+
+        Args:
+            marker: Marcador numérico a buscar (ej: "<<1>>")
+            start_search_idx: Índice desde donde empezar la búsqueda
+            all_paras: Lista de todos los párrafos
+
+        Returns:
+            Número de página donde se encuentra el marcador, o None si no se encuentra
+        """
+        page_count = 1
+
+        for i in range(start_search_idx + 1, len(all_paras)):
+            para = all_paras[i]
+
+            # Verificar si hay un salto de página en este párrafo
+            if self._has_page_break_xml(para):
+                page_count += 1
+
+            # Verificar si este párrafo contiene el marcador
+            para_text = self._get_paragraph_text(para)
+            if marker in para_text:
+                return page_count
+
+        return None
+
+    def _remove_numeric_markers_xml(self):
+        """Elimina todos los marcadores numéricos (<<1>>, <<2>>, etc.) del documento."""
+        marker_pattern = re.compile(r'<<\d+>>')
+
         for text_elem in self.root.findall(f'.//{{{self.w_ns}}}t'):
             if text_elem.text and marker_pattern.search(text_elem.text):
                 text_elem.text = marker_pattern.sub('', text_elem.text)
+
+    def _has_page_break_xml(self, para: etree.Element) -> bool:
+        """
+        Verifica si un párrafo contiene un salto de página.
+
+        Args:
+            para: Elemento de párrafo XML
+
+        Returns:
+            True si el párrafo contiene un salto de página, False en caso contrario
+        """
+        # Buscar elementos de salto de página (w:br con w:type="page")
+        for br in para.findall(f'.//{{{self.w_ns}}}br'):
+            break_type = br.get(f'{{{self.w_ns}}}type')
+            if break_type == 'page':
+                return True
+        return False
+
+    def _insert_page_break_at_end_of_paragraph(self, para: etree.Element):
+        """Inserta un salto de página al final de un párrafo."""
+        # Crear un nuevo run con salto de página
+        new_run = etree.Element(f'{{{self.w_ns}}}r')
+        br = etree.SubElement(new_run, f'{{{self.w_ns}}}br')
+        br.set(f'{{{self.w_ns}}}type', 'page')
+
+        # Agregar al final del párrafo
+        para.append(new_run)
+
+    def _insert_page_break_at_start_of_paragraph(self, para: etree.Element):
+        """Inserta un salto de página al inicio de un párrafo."""
+        # Crear un nuevo run con salto de página
+        new_run = etree.Element(f'{{{self.w_ns}}}r')
+        br = etree.SubElement(new_run, f'{{{self.w_ns}}}br')
+        br.set(f'{{{self.w_ns}}}type', 'page')
+
+        # Insertar al inicio del párrafo
+        para.insert(0, new_run)
+
+    def _set_paragraph_text(self, para: etree.Element, new_text: str):
+        """Establece el texto de un párrafo, reemplazando todo el contenido de texto."""
+        # Encontrar el primer elemento de texto o crear uno nuevo
+        text_elems = para.findall(f'.//{{{self.w_ns}}}t')
+
+        if text_elems:
+            # Actualizar el primer elemento de texto
+            text_elems[0].text = new_text
+            text_elems[0].set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+
+            # Eliminar otros elementos de texto
+            for text_elem in text_elems[1:]:
+                run = text_elem.getparent()
+                if run is not None:
+                    run.remove(text_elem)
+        else:
+            # No hay elementos de texto, crear uno nuevo
+            run = para.find(f'.//{{{self.w_ns}}}r')
+            if run is None:
+                # No hay runs, crear uno nuevo
+                run = etree.SubElement(para, f'{{{self.w_ns}}}r')
+
+            text_elem = etree.SubElement(run, f'{{{self.w_ns}}}t')
+            text_elem.text = new_text
+            text_elem.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+
+    def clean_unused_markers(self):
+        """
+        Limpia marcadores no utilizados del documento.
+
+        Si un párrafo contiene SOLO un marcador (o marcador con puntuación/numeración),
+        elimina el párrafo completo. Si hay más contenido, solo elimina el marcador.
+
+        IMPORTANTE: Nunca elimina párrafos que contengan imágenes, shapes o dibujos,
+        o que tengan configuración de sección (sectPr), para preservar el diseño.
+        """
+        marker_pattern = re.compile(r'<<[^>]+>>')
+        body = self.root.find(f'.//{{{self.w_ns}}}body')
+        if body is None:
+            return
+
+        paras_to_delete = []
+        all_paras = body.findall(f'{{{self.w_ns}}}p')
+
+        for para in all_paras:
+            para_text = self._get_paragraph_text(para)
+
+            if marker_pattern.search(para_text):
+                # Proteger párrafos con configuración de sección (columnas, etc.)
+                if self._paragraph_has_section_break_xml(para):
+                    # Solo eliminar el marcador, preservar el párrafo
+                    for text_elem in para.findall(f'.//{{{self.w_ns}}}t'):
+                        if text_elem.text:
+                            text_elem.text = marker_pattern.sub('', text_elem.text)
+                    continue
+
+                # Proteger párrafos con imágenes o dibujos
+                if self._has_drawing_or_image_xml(para):
+                    # Solo eliminar el marcador, preservar el párrafo
+                    for text_elem in para.findall(f'.//{{{self.w_ns}}}t'):
+                        if text_elem.text:
+                            text_elem.text = marker_pattern.sub('', text_elem.text)
+                    continue
+
+                # Verificar si el párrafo solo contiene marcador y elementos decorativos
+                text_without_markers = marker_pattern.sub('', para_text).strip()
+                # Eliminar puntuación común, números, guiones, viñetas
+                text_cleaned = re.sub(r'^[\d\.\-\)\(\s•·◦▪▫○●\*]+$', '', text_without_markers)
+
+                if not text_cleaned:
+                    # El párrafo solo contiene marcador + elementos decorativos
+                    paras_to_delete.append(para)
+                else:
+                    # Hay contenido real, solo eliminar el marcador
+                    for text_elem in para.findall(f'.//{{{self.w_ns}}}t'):
+                        if text_elem.text:
+                            text_elem.text = marker_pattern.sub('', text_elem.text)
+
+        # Eliminar los párrafos marcados
+        for para in paras_to_delete:
+            body.remove(para)
+
+    def _paragraph_has_section_break_xml(self, para: etree.Element) -> bool:
+        """
+        Verifica si un párrafo tiene configuración de sección (sectPr).
+
+        Args:
+            para: Elemento de párrafo XML
+
+        Returns:
+            True si el párrafo tiene sectPr, False en caso contrario
+        """
+        # Buscar elemento sectPr en las propiedades del párrafo
+        pPr = para.find(f'{{{self.w_ns}}}pPr')
+        if pPr is not None:
+            sectPr = pPr.find(f'{{{self.w_ns}}}sectPr')
+            if sectPr is not None:
+                return True
+        return False
+
+    def _has_drawing_or_image_xml(self, para: etree.Element) -> bool:
+        """
+        Verifica si un párrafo contiene imágenes, shapes, dibujos u otros elementos gráficos.
+
+        Args:
+            para: Elemento de párrafo XML
+
+        Returns:
+            True si el párrafo contiene elementos gráficos, False en caso contrario
+        """
+        # Buscar elementos de dibujo (drawing)
+        if para.find(f'.//{{{self.w_ns}}}drawing') is not None:
+            return True
+
+        # Buscar elementos de imagen (pict)
+        if para.find(f'.//{{{self.w_ns}}}pict') is not None:
+            return True
+
+        # Buscar elementos VML (shapes de Office)
+        v_ns = 'urn:schemas-microsoft-com:vml'
+        if para.find(f'.//{{{v_ns}}}shape') is not None:
+            return True
+        if para.find(f'.//{{{v_ns}}}imagedata') is not None:
+            return True
+
+        return False
     
     def remove_empty_lines_at_page_start(self):
         """Elimina líneas vacías al inicio de páginas - stub."""
