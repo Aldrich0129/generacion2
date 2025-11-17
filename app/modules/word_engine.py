@@ -557,7 +557,9 @@ class WordEngine:
     def _insert_document_at_marker(self, marker: str, doc_path: Path):
         """
         Inserta el contenido de otro documento en la posición del marcador.
-        Preserva las propiedades de sección (section) incluyendo el diseño de columnas.
+
+        IMPORTANTE: NO modifica la configuración de secciones ni columnas del documento principal.
+        El diseño de doble columna de la plantilla se preserva automáticamente.
 
         Args:
             marker: Marcador donde insertar
@@ -575,36 +577,9 @@ class WordEngine:
                 # Insertar el contenido del documento
                 para_element = paragraph._element
 
-                # Verificar si el documento a insertar tiene configuración de columnas diferente
-                if len(doc_to_insert.sections) > 0:
-                    source_section = doc_to_insert.sections[0]
-
-                    # Intentar obtener la configuración de columnas del documento fuente
-                    try:
-                        source_cols_element = source_section._sectPr.find(
-                            './/{http://schemas.openxmlformats.org/wordprocessingml/2006/main}cols'
-                        )
-
-                        # Si el documento fuente tiene configuración de columnas,
-                        # crear una nueva sección para preservar ese formato
-                        if source_cols_element is not None:
-                            # Insertar un salto de sección continuo antes del contenido
-                            section_break = OxmlElement('w:p')
-                            pPr = OxmlElement('w:pPr')
-                            sectPr = OxmlElement('w:sectPr')
-
-                            # Copiar la configuración de columnas
-                            cols_copy = deepcopy(source_cols_element)
-                            sectPr.append(cols_copy)
-
-                            pPr.append(sectPr)
-                            section_break.append(pPr)
-                            para_element.addprevious(section_break)
-                    except Exception as e:
-                        # Si hay error al copiar columnas, continuar sin ellas
-                        print(f"Advertencia: No se pudo copiar la configuración de columnas: {e}")
-
                 # Copiar párrafos del documento a insertar
+                # SIMPLEMENTE copiamos el contenido sin modificar las secciones
+                # La plantilla principal mantiene su diseño de columnas original
                 for insert_para in doc_to_insert.paragraphs:
                     # Crear un nuevo párrafo con el mismo formato
                     new_para = deepcopy(insert_para._element)
@@ -616,30 +591,6 @@ class WordEngine:
                     new_table = deepcopy(insert_table._element)
                     para_element.addnext(new_table)
                     para_element = new_table
-
-                # Si insertamos contenido con columnas, agregar un salto de sección al final
-                # para restaurar la configuración de columnas original
-                try:
-                    if len(doc_to_insert.sections) > 0:
-                        source_cols_element = doc_to_insert.sections[0]._sectPr.find(
-                            './/{http://schemas.openxmlformats.org/wordprocessingml/2006/main}cols'
-                        )
-                        if source_cols_element is not None:
-                            # Crear párrafo con salto de sección para restaurar formato original
-                            end_section_break = OxmlElement('w:p')
-                            end_pPr = OxmlElement('w:pPr')
-                            end_sectPr = OxmlElement('w:sectPr')
-
-                            # Restaurar a una sola columna (configuración por defecto)
-                            end_cols = OxmlElement('w:cols')
-                            end_cols.set(qn('w:num'), '1')
-                            end_sectPr.append(end_cols)
-
-                            end_pPr.append(end_sectPr)
-                            end_section_break.append(end_pPr)
-                            para_element.addnext(end_section_break)
-                except Exception as e:
-                    print(f"Advertencia: No se pudo restaurar la configuración de columnas: {e}")
 
                 return
 
@@ -1408,102 +1359,146 @@ class WordEngine:
         """
         Convierte el documento a PDF y retorna los bytes.
 
-        Utiliza LibreOffice para la conversión, lo que garantiza que:
-        - Las imágenes de fondo se preservan correctamente
-        - Los headers y footers mantienen sus elementos gráficos
-        - El formato general del documento se mantiene intacto
+        IMPORTANTE: Para exportar a PDF sin aplicaciones externas no es técnicamente posible
+        manteniendo el formato completo del documento (columnas, imágenes, etc.).
 
-        Nota: Requiere que LibreOffice esté instalado en el sistema.
-        En Linux: sudo apt-get install libreoffice
-        En macOS: brew install libreoffice
-        En Windows: descargar de https://www.libreoffice.org/download/
+        Esta función intenta usar las siguientes opciones en orden:
+        1. LibreOffice (libreoffice/soffice) - Mejor calidad, preserva todo el formato
+        2. docx2pdf - Alternativa si está disponible (requiere Word en Windows)
+
+        Instalación recomendada de LibreOffice:
+        - Linux: sudo apt-get install libreoffice
+        - macOS: brew install libreoffice
+        - Windows: Descargar de https://www.libreoffice.org/download/
 
         Returns:
             Bytes del documento en formato PDF
 
         Raises:
-            RuntimeError: Si LibreOffice no está instalado o hay error en la conversión
+            RuntimeError: Si ninguna herramienta de conversión está disponible
         """
         import tempfile
         import os
         import subprocess
         import shutil
 
-        # Verificar si LibreOffice está instalado
+        # Opción 1: Intentar con LibreOffice (mejor opción)
         libreoffice_cmd = None
         for cmd in ['libreoffice', 'soffice']:
             if shutil.which(cmd):
                 libreoffice_cmd = cmd
                 break
 
-        if not libreoffice_cmd:
-            raise RuntimeError(
-                "LibreOffice no está instalado. "
-                "Instálalo con: sudo apt-get install libreoffice (Linux) o "
-                "brew install libreoffice (macOS)"
-            )
+        if libreoffice_cmd:
+            # Usar LibreOffice para la conversión
+            temp_dir = tempfile.mkdtemp()
 
-        # Crear directorio temporal
-        temp_dir = tempfile.mkdtemp()
+            try:
+                # Guardar el documento en el directorio temporal
+                docx_path = os.path.join(temp_dir, 'documento.docx')
+                self.doc.save(docx_path)
 
-        try:
-            # Guardar el documento en el directorio temporal
-            docx_path = os.path.join(temp_dir, 'documento.docx')
-            self.doc.save(docx_path)
-
-            # Convertir DOCX a PDF usando LibreOffice
-            # --headless: ejecutar sin interfaz gráfica
-            # --convert-to pdf: convertir a PDF
-            # --outdir: directorio de salida
-            result = subprocess.run(
-                [
-                    libreoffice_cmd,
-                    '--headless',
-                    '--convert-to',
-                    'pdf',
-                    '--outdir',
-                    temp_dir,
-                    docx_path
-                ],
-                capture_output=True,
-                text=True,
-                timeout=60  # Timeout de 60 segundos
-            )
-
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"LibreOffice falló al convertir el documento: {result.stderr}"
+                # Convertir DOCX a PDF usando LibreOffice
+                result = subprocess.run(
+                    [
+                        libreoffice_cmd,
+                        '--headless',
+                        '--convert-to',
+                        'pdf',
+                        '--outdir',
+                        temp_dir,
+                        docx_path
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=60  # Timeout de 60 segundos
                 )
 
-            # Leer el PDF generado
-            pdf_path = os.path.join(temp_dir, 'documento.pdf')
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"LibreOffice falló al convertir el documento: {result.stderr}"
+                    )
 
-            if not os.path.exists(pdf_path):
-                raise RuntimeError("El archivo PDF no se generó correctamente")
+                # Leer el PDF generado
+                pdf_path = os.path.join(temp_dir, 'documento.pdf')
 
-            with open(pdf_path, 'rb') as pdf_file:
-                pdf_bytes = pdf_file.read()
+                if not os.path.exists(pdf_path):
+                    raise RuntimeError("El archivo PDF no se generó correctamente")
 
-            return pdf_bytes
+                with open(pdf_path, 'rb') as pdf_file:
+                    pdf_bytes = pdf_file.read()
 
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(
-                "La conversión a PDF tardó demasiado tiempo. "
-                "Intenta con un documento más pequeño."
-            )
-        except Exception as e:
-            raise RuntimeError(f"Error al convertir a PDF: {e}")
-        finally:
-            # Limpiar directorio temporal
+                return pdf_bytes
+
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(
+                    "La conversión a PDF tardó demasiado tiempo. "
+                    "Intenta con un documento más pequeño."
+                )
+            except Exception as e:
+                raise RuntimeError(f"Error al convertir a PDF con LibreOffice: {e}")
+            finally:
+                # Limpiar directorio temporal
+                try:
+                    shutil.rmtree(temp_dir)
+                except Exception:
+                    pass
+
+        # Opción 2: Intentar con docx2pdf (si está instalado)
+        try:
+            import docx2pdf
+            temp_dir = tempfile.mkdtemp()
+
             try:
-                shutil.rmtree(temp_dir)
-            except Exception:
-                pass  # Ignorar errores al limpiar
+                # Guardar el documento
+                docx_path = os.path.join(temp_dir, 'documento.docx')
+                pdf_path = os.path.join(temp_dir, 'documento.pdf')
+                self.doc.save(docx_path)
+
+                # Convertir usando docx2pdf
+                docx2pdf.convert(docx_path, pdf_path)
+
+                # Leer el PDF generado
+                if os.path.exists(pdf_path):
+                    with open(pdf_path, 'rb') as pdf_file:
+                        pdf_bytes = pdf_file.read()
+                    return pdf_bytes
+                else:
+                    raise RuntimeError("docx2pdf no generó el archivo PDF")
+
+            finally:
+                # Limpiar directorio temporal
+                try:
+                    shutil.rmtree(temp_dir)
+                except Exception:
+                    pass
+
+        except ImportError:
+            pass  # docx2pdf no está instalado
+        except Exception as e:
+            # Si docx2pdf falla, continuar al mensaje de error final
+            print(f"Advertencia: docx2pdf falló: {e}")
+
+        # Si llegamos aquí, ninguna opción funcionó
+        raise RuntimeError(
+            "No se encontró ninguna herramienta para convertir a PDF.\n\n"
+            "Para exportar a PDF, instala LibreOffice:\n"
+            "• Linux: sudo apt-get install libreoffice\n"
+            "• macOS: brew install libreoffice\n"
+            "• Windows: Descarga de https://www.libreoffice.org/download/\n\n"
+            "Alternativamente, puedes:\n"
+            "1. Descargar el archivo Word (.docx)\n"
+            "2. Abrirlo en Microsoft Word o LibreOffice\n"
+            "3. Guardar como PDF desde allí"
+        )
 
     def insert_background_image(self, image_path: Path, page_type: str = "first"):
         """
-        Inserta una imagen como fondo en la primera o última página del documento.
-        La imagen se ajusta automáticamente al tamaño de la página y se coloca detrás del texto.
+        Inserta una imagen en la primera o última página del documento.
+
+        NOTA: Esta versión simplificada inserta la imagen sin manipulación XML compleja
+        para evitar corrupción del documento. La imagen se inserta como una imagen normal
+        en un párrafo, sin intentar posicionarla "detrás del texto".
 
         Args:
             image_path: Ruta a la imagen a insertar
@@ -1514,104 +1509,38 @@ class WordEngine:
             return
 
         try:
-            # Obtener la sección apropiada
-            if page_type == "first":
-                # Usar la primera sección
-                section = self.doc.sections[0]
-                # Insertar en el primer párrafo
-                target_para = self.doc.paragraphs[0]
-            elif page_type == "last":
-                # Usar la última sección
-                section = self.doc.sections[-1]
-                # Insertar en el último párrafo
-                target_para = self.doc.paragraphs[-1]
-            else:
-                print(f"Advertencia: page_type no válido: {page_type}")
-                return
-
-            # Obtener dimensiones de la página (convertir de EMU a pulgadas)
+            # Obtener dimensiones de la página
+            section = self.doc.sections[0] if page_type == "first" else self.doc.sections[-1]
             page_width = section.page_width
             page_height = section.page_height
 
-            # Determinar orientación
-            is_landscape = page_width > page_height
-
-            # Insertar la imagen en un párrafo nuevo al principio/final
-            if page_type == "first":
-                # Insertar al principio
-                new_para = self.doc.paragraphs[0]._element
-                # Crear un nuevo párrafo antes del primero
-                para_element = OxmlElement('w:p')
-                new_para.addprevious(para_element)
-            else:
-                # Insertar al final
-                para_element = target_para._element
-
-            # Agregar la imagen al párrafo
-            # Usar el método interno de python-docx para agregar la imagen
-            # Necesitamos crear un nuevo párrafo en la posición correcta
+            # Crear un nuevo párrafo para la imagen
             if page_type == "first":
                 # Insertar al principio del documento
-                run = self.doc.paragraphs[0].insert_paragraph_before().add_run()
+                para = self.doc.paragraphs[0].insert_paragraph_before()
             else:
                 # Insertar al final del documento
-                run = self.doc.add_paragraph().add_run()
+                para = self.doc.add_paragraph()
 
-            # Agregar la imagen con el tamaño de la página
-            picture = run.add_picture(str(image_path), width=page_width, height=page_height)
+            # Configurar el párrafo sin espaciado
+            para.paragraph_format.space_before = Pt(0)
+            para.paragraph_format.space_after = Pt(0)
+            para.paragraph_format.line_spacing = 1.0
 
-            # Configurar la imagen para que esté detrás del texto
-            # Acceder al elemento XML de la imagen
-            inline = run._element.xpath('.//wp:inline')
-            if inline:
-                inline_element = inline[0]
+            # Agregar la imagen al párrafo
+            # Nota: Ajustamos el tamaño para que sea lo más grande posible sin desbordar
+            run = para.add_run()
 
-                # Convertir inline a anchor (necesario para posicionamiento detrás del texto)
-                # Crear un nuevo elemento anchor
-                anchor = OxmlElement('wp:anchor')
+            # Reducir un poco el tamaño para evitar problemas de márgenes
+            # Los márgenes típicos son alrededor de 1 pulgada (914400 EMU)
+            adjusted_width = page_width - Inches(2).inches  # Restar 2 pulgadas para márgenes
+            adjusted_height = page_height - Inches(2).inches  # Restar 2 pulgadas para márgenes
 
-                # Copiar atributos importantes
-                for attr in ['distT', 'distB', 'distL', 'distR', 'simplePos', 'relativeHeight',
-                           'behindDoc', 'locked', 'layoutInCell', 'allowOverlap']:
-                    anchor.set(attr, '0')
+            picture = run.add_picture(str(image_path), width=int(adjusted_width), height=int(adjusted_height))
 
-                # Configurar para estar detrás del texto
-                anchor.set('behindDoc', '1')
-                anchor.set('allowOverlap', '1')
-
-                # Copiar el contenido del inline al anchor
-                for child in list(inline_element):
-                    anchor.append(child)
-
-                # Configurar posicionamiento
-                # Simple pos
-                simple_pos = OxmlElement('wp:simplePos')
-                simple_pos.set('x', '0')
-                simple_pos.set('y', '0')
-                anchor.insert(0, simple_pos)
-
-                # Position H (horizontal)
-                position_h = OxmlElement('wp:positionH')
-                position_h.set('relativeFrom', 'page')
-                align_h = OxmlElement('wp:align')
-                align_h.text = 'center'
-                position_h.append(align_h)
-                anchor.append(position_h)
-
-                # Position V (vertical)
-                position_v = OxmlElement('wp:positionV')
-                position_v.set('relativeFrom', 'page')
-                align_v = OxmlElement('wp:align')
-                align_v.text = 'center'
-                position_v.append(align_v)
-                anchor.append(position_v)
-
-                # Reemplazar inline con anchor
-                inline_element.getparent().replace(inline_element, anchor)
-
-            print(f"Imagen de fondo insertada en página {page_type}: {image_path.name}")
+            print(f"Imagen insertada en página {page_type}: {image_path.name}")
 
         except Exception as e:
-            print(f"Error al insertar imagen de fondo: {e}")
+            print(f"Error al insertar imagen: {e}")
             import traceback
             traceback.print_exc()

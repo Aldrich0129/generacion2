@@ -115,6 +115,7 @@ def main():
                 engine.preserve_headers_and_footers()
 
                 # 12.5 Insertar imágenes de fondo si están configuradas
+                # NOTA: Ahora usa versión simplificada que no corrompe el documento
                 first_page_image_path = st.session_state.get("first_page_image_path")
                 if first_page_image_path:
                     img_path = Path(first_page_image_path)
