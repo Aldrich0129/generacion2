@@ -117,6 +117,7 @@ class WordEngine:
     def _replace_marker_in_paragraph(self, paragraph, marker: str, value: str):
         """
         Reemplaza un marcador específico manteniendo el formato del primer run.
+        IMPORTANTE: Preserva imágenes y elementos gráficos en los runs.
 
         Args:
             paragraph: Párrafo de python-docx
@@ -134,6 +135,13 @@ class WordEngine:
         if marker not in full_text:
             return
 
+        # IMPORTANTE: Verificar si algún run contiene imágenes
+        # Si un run tiene imagen, debemos preservarlo modificando solo el texto
+        runs_with_images = []
+        for i, run in enumerate(paragraph.runs):
+            if self._run_has_image(run):
+                runs_with_images.append(i)
+
         # Encontrar la posición del marcador
         marker_start = full_text.find(marker)
         marker_end = marker_start + len(marker)
@@ -147,45 +155,94 @@ class WordEngine:
             run_start = current_pos
             run_end = current_pos + len(run_text)
 
+            # IMPORTANTE: Si este run contiene imagen, preservarlo
+            has_image = (i in runs_with_images)
+
             # Verificar si este run contiene parte del marcador
             if run_end <= marker_start or run_start >= marker_end:
                 # Este run no toca el marcador, mantenerlo
-                new_runs.append((run_text, run))
+                new_runs.append((run_text, run, has_image))
             elif run_start <= marker_start and run_end >= marker_end:
                 # El marcador está completamente dentro de este run
                 before = run_text[:marker_start - run_start]
                 after = run_text[marker_end - run_start:]
-                new_runs.append((before + value + after, run))
+                new_runs.append((before + value + after, run, has_image))
             elif run_start < marker_start < run_end:
                 # El marcador comienza en este run
                 before = run_text[:marker_start - run_start]
-                new_runs.append((before + value, run))
+                new_runs.append((before + value, run, has_image))
             elif run_start < marker_end <= run_end:
                 # El marcador termina en este run
                 after = run_text[marker_end - run_start:]
                 if after:
-                    new_runs.append((after, run))
+                    new_runs.append((after, run, has_image))
             # else: este run está completamente dentro del marcador, se omite
+            # PERO: si tiene imagen, debemos preservarlo
+            elif has_image:
+                # Este run tiene imagen y está dentro del marcador, preservar solo la imagen
+                new_runs.append(("", run, has_image))
 
             current_pos = run_end
 
-        # Limpiar runs existentes
-        for run in paragraph.runs:
-            run.text = ""
+        # Reconstruir el párrafo preservando imágenes
+        # ESTRATEGIA: Para runs con imágenes, solo modificar el texto sin eliminar el run
+        # Para runs sin imágenes, eliminar y recrear
 
-        # Recrear runs con el nuevo texto
-        if new_runs:
-            for new_text, original_run in new_runs:
-                if new_text:
-                    # Copiar formato del run original
-                    new_run = paragraph.add_run(new_text)
-                    new_run.bold = original_run.bold
-                    new_run.italic = original_run.italic
-                    new_run.underline = original_run.underline
-                    new_run.font.size = original_run.font.size
-                    new_run.font.name = original_run.font.name
-                    if original_run.font.color.rgb:
-                        new_run.font.color.rgb = original_run.font.color.rgb
+        # Paso 1: Modificar runs con imágenes en su lugar
+        runs_to_keep = []
+        for new_text, original_run, has_image in new_runs:
+            if has_image:
+                # Modificar el texto del run existente sin eliminarlo
+                original_run.text = new_text
+                runs_to_keep.append(original_run)
+
+        # Paso 2: Eliminar runs que no tienen imágenes
+        for i, run in enumerate(paragraph.runs):
+            if i not in runs_with_images:
+                run.text = ""
+
+        # Paso 3: Recrear runs sin imágenes
+        for new_text, original_run, has_image in new_runs:
+            if not has_image and new_text:
+                # Copiar formato del run original
+                new_run = paragraph.add_run(new_text)
+                new_run.bold = original_run.bold
+                new_run.italic = original_run.italic
+                new_run.underline = original_run.underline
+                new_run.font.size = original_run.font.size
+                new_run.font.name = original_run.font.name
+                if original_run.font.color.rgb:
+                    new_run.font.color.rgb = original_run.font.color.rgb
+
+    def _run_has_image(self, run) -> bool:
+        """
+        Verifica si un run contiene imágenes o elementos gráficos.
+
+        Args:
+            run: Run de python-docx
+
+        Returns:
+            True si el run contiene imágenes, False en caso contrario
+        """
+        # Obtener el elemento XML del run
+        run_element = run._element
+
+        # Buscar elementos de dibujo (w:drawing)
+        drawings = run_element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing')
+        if drawings:
+            return True
+
+        # Buscar elementos de imagen (w:pict)
+        pictures = run_element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pict')
+        if pictures:
+            return True
+
+        # Buscar pic:pic (imágenes en el namespace de picture)
+        pics = run_element.xpath('.//pic:pic')
+        if pics:
+            return True
+
+        return False
 
     def insert_tables(self, tables_data: dict, cfg_tab: dict, format_config: dict = None):
         """
@@ -323,12 +380,23 @@ class WordEngine:
         header_row = table.rows[0]
         for j, col in enumerate(columns):
             cell = header_row.cells[j]
-            header_text = col.get("header", "")
 
-            # Reemplazar placeholders en el header si hay headers dinámicos
-            if headers:
-                for key, value in headers.items():
-                    header_text = header_text.replace(f"{{{key}}}", str(value))
+            # IMPORTANTE: Soportar tanto 'header' como 'header_template'
+            # 'header' es un texto fijo
+            # 'header_template' es un template que se rellena con valores de 'headers'
+            if "header_template" in col:
+                # Usar el template y reemplazar con valores dinámicos
+                header_text = col["header_template"]
+                if headers:
+                    for key, value in headers.items():
+                        header_text = header_text.replace(f"{{{key}}}", str(value))
+            else:
+                # Usar el header fijo
+                header_text = col.get("header", "")
+                # También reemplazar placeholders si hay headers dinámicos
+                if headers:
+                    for key, value in headers.items():
+                        header_text = header_text.replace(f"{{{key}}}", str(value))
 
             cell.text = header_text
 
