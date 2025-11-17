@@ -1,6 +1,17 @@
 """
 Motor de generación de documentos Word usando python-docx.
 Maneja reemplazo de variables, inserción de tablas y bloques condicionales.
+
+NOTA IMPORTANTE: Conservación de Imágenes de Fondo
+---------------------------------------------------
+python-docx preserva automáticamente todos los elementos gráficos de la plantilla original:
+- Imágenes de fondo en portada y páginas finales
+- Imágenes en headers y footers
+- Formas, marcas de agua y otros elementos gráficos
+- Imágenes configuradas como "Detrás del texto"
+
+El motor solo modifica el contenido de texto, tablas y párrafos específicamente editados.
+Todos los elementos visuales de la plantilla permanecen intactos durante la generación.
 """
 from docx import Document
 from docx.shared import Pt, RGBColor, Inches
@@ -961,3 +972,65 @@ class WordEngine:
         self.doc.save(buffer)
         buffer.seek(0)
         return buffer.getvalue()
+
+    def get_pdf_bytes(self) -> bytes:
+        """
+        Convierte el documento a PDF y retorna los bytes.
+
+        Nota: Requiere que pandoc esté instalado en el sistema.
+        En Linux: sudo apt-get install pandoc
+        En macOS: brew install pandoc
+        En Windows: descargar de https://pandoc.org/installing.html
+
+        Returns:
+            Bytes del documento en formato PDF
+
+        Raises:
+            RuntimeError: Si pandoc no está instalado o hay error en la conversión
+        """
+        import tempfile
+        import os
+        try:
+            import pypandoc
+        except ImportError:
+            raise RuntimeError(
+                "pypandoc no está instalado. "
+                "Instálalo con: pip install pypandoc"
+            )
+
+        # Crear archivos temporales
+        with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as tmp_docx:
+            docx_path = tmp_docx.name
+            self.doc.save(docx_path)
+
+        try:
+            # Convertir DOCX a PDF usando pypandoc
+            pdf_path = docx_path.replace('.docx', '.pdf')
+
+            # pypandoc puede usar varios engines de conversión
+            # Por defecto intenta usar el mejor disponible
+            pypandoc.convert_file(
+                docx_path,
+                'pdf',
+                outputfile=pdf_path,
+                extra_args=['--pdf-engine=xelatex']  # Mejor soporte para caracteres especiales
+            )
+
+            # Leer el PDF generado
+            with open(pdf_path, 'rb') as pdf_file:
+                pdf_bytes = pdf_file.read()
+
+            # Limpiar archivos temporales
+            os.unlink(pdf_path)
+
+            return pdf_bytes
+
+        except Exception as e:
+            raise RuntimeError(
+                f"Error al convertir a PDF: {e}. "
+                "Asegúrate de que pandoc esté instalado en tu sistema."
+            )
+        finally:
+            # Limpiar archivo DOCX temporal
+            if os.path.exists(docx_path):
+                os.unlink(docx_path)

@@ -114,15 +114,41 @@ def main():
                 ejercicio = simple_inputs.get("ejercicio_completo", "2023")
 
                 # Limpiar nombre para archivo
-                nombre_archivo = f"Informe_PT_{nombre_empresa.replace(' ', '_')}_{ejercicio}.docx"
+                nombre_base = f"Informe_PT_{nombre_empresa.replace(' ', '_')}_{ejercicio}"
+                nombre_archivo_docx = f"{nombre_base}.docx"
+                nombre_archivo_pdf = f"{nombre_base}.pdf"
 
-                st.download_button(
-                    label="📥 Descargar Informe",
-                    data=doc_bytes,
-                    file_name=nombre_archivo,
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    type="primary"
-                )
+                # Crear dos columnas para los botones de descarga
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.download_button(
+                        label="📥 Descargar Word (.docx)",
+                        data=doc_bytes,
+                        file_name=nombre_archivo_docx,
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        type="primary",
+                        use_container_width=True
+                    )
+
+                with col2:
+                    # Intentar generar PDF
+                    try:
+                        pdf_bytes = engine.get_pdf_bytes()
+                        st.download_button(
+                            label="📑 Descargar PDF",
+                            data=pdf_bytes,
+                            file_name=nombre_archivo_pdf,
+                            mime="application/pdf",
+                            type="secondary",
+                            use_container_width=True
+                        )
+                    except RuntimeError as pdf_error:
+                        # Si falla la conversión a PDF, mostrar mensaje informativo
+                        st.warning(
+                            f"⚠️ No se pudo generar el PDF: {pdf_error}\n\n"
+                            "Puedes descargar el archivo Word y convertirlo manualmente."
+                        )
 
                 st.balloons()
 
